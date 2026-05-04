@@ -35,7 +35,6 @@ client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 MODEL = "claude-opus-4-6"
 
 # ─── テンプレート・インメモリストア ───────────────────────────────
-# { template_id: { id, name, filename, content(bytes) } }
 templates_store: Dict[str, dict] = {}
 
 # ─── 料金定義 (per 1M tokens) ────────────────────────────────────
@@ -57,7 +56,7 @@ class Slide(BaseModel):
     body: List[str] = []
     notes: str = ""
     visual_hint: str = ""
-    image_prompt: str = ""          # 画像生成AIへのプロンプト
+    image_prompt: str = ""
 
 class ProposalStructure(BaseModel):
     client_name: str
@@ -65,8 +64,8 @@ class ProposalStructure(BaseModel):
     date: str = ""
     author: str = ""
     slides: List[Slide]
-    template_id: str = ""           # 使用テンプレートID
-    usage: dict = {}                # API利用量
+    template_id: str = ""
+    usage: dict = {}
 
 class GenerateStructureRequest(BaseModel):
     client_name: str
@@ -74,8 +73,8 @@ class GenerateStructureRequest(BaseModel):
     requirements: str
     date: str = ""
     author: str = ""
-    reference_text: str = ""        # 参考資料の抽出テキスト
-    template_id: str = ""           # 選択テンプレートID
+    reference_text: str = ""
+    template_id: str = ""
 
 
 # ─── ヘルスチェック ───────────────────────────────────────────────
@@ -139,7 +138,6 @@ async def extract_reference(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(500, f"テキスト抽出エラー: {e}")
 
-    # 長すぎる場合は先頭 6000 文字に切り詰め
     if len(text) > 6000:
         text = text[:6000] + "\n\n[※ 文字数制限のため冒頭部分のみ参照しています]"
 
@@ -194,40 +192,25 @@ async def generate_structure(req: GenerateStructureRequest):
         reference_section = f"""
 ## 参考資料（RFP・与件文書）
 以下の資料内容を必ず参照し、提案内容に反映してください:
-```
 {req.reference_text}
-```
 """
 
     system_prompt = f"""あなたは一流のコンサルタントです。
 与件をもとに、クライアントを説得できる高品質な提案書スライド構成をJSONで生成してください。
 
 ## ルール
-- スライド枚数: 10〜14枚
+- スライド枚数: 10〜13枚（簡潔にまとめる）
 - 各スライドの type は title / toc / section / content / closing のいずれか
-- body は箇条書き（各項目は完全な文章、1〜5項目）
+- body は箇条書き（各項目は完全な文章、1〜4項目）
 - visual_hint: そのスライドで使うと効果的なグラフ・図・表のヒント（日本語、任意）
 - image_prompt: 図解や概念図があると明らかに伝わりやすいスライドにのみ設定。
-  Gemini/ChatGPT などの画像生成AIへの詳細な日本語プロンプト文（200字以内）。
-  テキスト中心スライドには設定しない。
-- notes: 発表者ノート（1〜3文）
+  Gemini/ChatGPT などの画像生成AIへの詳細な日本語プロンプト文（150字以内）。
+  テキスト中心スライドには設定しない（空文字列にする）。
+- notes: 発表者ノート（1〜2文）
 - 提案カテゴリ: {category_label}
 
-## 出力フォーマット（JSONのみ。説明文は不要）
-{{
-  "proposal_title": "...",
-  "slides": [
-    {{
-      "type": "title",
-      "title": "...",
-      "body": [],
-      "notes": "...",
-      "visual_hint": "",
-      "image_prompt": ""
-    }},
-    ...
-  ]
-}}"""
+## 重要: 出力はJSONオブジェクトのみ。前後に説明文・コードブロック記号は不要。
+{{"proposal_title": "...", "slides": [{{"type": "title", "title": "...", "body": [], "notes": "...", "visual_hint": "", "image_prompt": ""}}]}}"""
 
     user_prompt = f"""クライアント名: {req.client_name}
 日付: {req.date or "未設定"}
@@ -240,7 +223,7 @@ async def generate_structure(req: GenerateStructureRequest):
     try:
         response = client.messages.create(
             model=MODEL,
-            max_tokens=4096,
+            max_tokens=8000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
@@ -250,12 +233,10 @@ async def generate_structure(req: GenerateStructureRequest):
     raw = response.content[0].text.strip()
 
     # JSON 抽出（複数パターン対応）
-    # パターン1: ```json ... ``` ブロック
     m = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", raw)
     if m:
         raw = m.group(1).strip()
     else:
-        # パターン2: { ... } を直接探す
         start = raw.find('{')
         end   = raw.rfind('}')
         if start != -1 and end != -1 and end > start:
@@ -266,7 +247,6 @@ async def generate_structure(req: GenerateStructureRequest):
     except json.JSONDecodeError as e:
         raise HTTPException(500, f"JSON パースエラー: {e} / 先頭: {raw[:300]}")
 
-    # usage 計算
     usage = {
         "input_tokens":       response.usage.input_tokens,
         "output_tokens":      response.usage.output_tokens,
@@ -307,7 +287,7 @@ async def generate_pptx(structure: ProposalStructure):
         content=pptx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         headers={
-            "Content-Disposition":        f"attachment; filename=\"proposal.pptx\"; filename*=UTF-8''{encoded}",
+            "Content-Disposition":           f"attachment; filename=\"proposal.pptx\"; filename*=UTF-8''{encoded}",
             "Access-Control-Expose-Headers": "Content-Disposition",
         },
     )
