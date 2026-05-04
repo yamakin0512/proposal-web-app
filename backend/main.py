@@ -6,6 +6,7 @@ import json
 import os
 import re
 from typing import List, Optional
+from urllib.parse import quote
 
 import anthropic
 from fastapi import FastAPI, HTTPException
@@ -153,11 +154,12 @@ async def generate_pptx(structure: ProposalStructure):
         raise HTTPException(status_code=500, detail=f"PPTX 生成に失敗しました: {e}")
 
     filename = f"提案書_{structure.client_name}.pptx"
+    encoded_filename = quote(filename)
     return Response(
         content=pptx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         headers={
-            "Content-Disposition": f'attachment; filename*=UTF-8\'\'{filename}',
+            "Content-Disposition": f"attachment; filename=\"proposal.pptx\"; filename*=UTF-8''{encoded_filename}",
             "Access-Control-Expose-Headers": "Content-Disposition",
         },
     )
