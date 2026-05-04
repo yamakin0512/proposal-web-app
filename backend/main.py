@@ -248,14 +248,23 @@ async def generate_structure(req: GenerateStructureRequest):
         raise HTTPException(500, f"Claude API エラー: {e}")
 
     raw = response.content[0].text.strip()
-    # JSON ブロック抽出
+
+    # JSON 抽出（複数パターン対応）
+    # パターン1: ```json ... ``` ブロック
     m = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", raw)
     if m:
-        raw = m.group(1)
+        raw = m.group(1).strip()
+    else:
+        # パターン2: { ... } を直接探す
+        start = raw.find('{')
+        end   = raw.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            raw = raw[start:end + 1]
+
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
-        raise HTTPException(500, f"JSON パースエラー: {raw[:200]}")
+    except json.JSONDecodeError as e:
+        raise HTTPException(500, f"JSON パースエラー: {e} / 先頭: {raw[:300]}")
 
     # usage 計算
     usage = {
